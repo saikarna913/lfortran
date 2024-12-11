@@ -25,17 +25,13 @@ inline void save_asr(const ASR::TranslationUnit_t &m, std::string& asr_string) {
 
 std::string save_modfile(const ASR::TranslationUnit_t &m) {
     if (m.m_symtab->get_scope().size() != 1) {
-        std::cerr << "Error: Modfile scope size is not 1" << std::endl;
-        std::exit(EXIT_FAILURE);
+        throw std::runtime_error("Modfile scope size is not 1");
     }
     for (auto &a : m.m_symtab->get_scope()) {
         if (!ASR::is_a<ASR::Module_t>(*a.second)) {
-            std::cerr << "Error: Expected ASR::Module_t" << std::endl;
-            std::cerr << "Modfile name: " << a.first << ", Modfile path: <Path to modfile>" << std::endl;
-            std::exit(EXIT_FAILURE);
+            throw std::runtime_error("Expected ASR::Module_t. Modfile name: " + a.first);
         }
     }
-
     std::string asr_string;
     save_asr(m, asr_string);
     return asr_string;
@@ -55,11 +51,11 @@ inline void load_serialised_asr(const std::string &s, std::string& asr_binary) {
     #endif
     std::string file_type = b.read_string();
     if (file_type != lfortran_modfile_type_string) {
-        throw LCompilersException("LCompilers Modfile format not recognized");
+        throw std::runtime_error("LCompilers Modfile format not recognized");
     }
     std::string version = b.read_string();
     if (version != LFORTRAN_VERSION) {
-        throw LCompilersException("Incompatible format: LFortran Modfile was generated using version '" + version + "', but current LFortran version is '" + LFORTRAN_VERSION + "'");
+        throw std::runtime_error("Incompatible format: LFortran Modfile was generated using version '" + version + "', but current LFortran version is '" + LFORTRAN_VERSION + "'");
     }
     asr_binary = b.read_string();
 }
