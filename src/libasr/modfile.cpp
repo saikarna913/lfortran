@@ -75,5 +75,4 @@ ASR::TranslationUnit_t* load_pycfile(Allocator &al, const std::string &s, bool l
     ASR::TranslationUnit_t *tu = ASR::down_cast2<ASR::TranslationUnit_t>(asr);
     return tu;
 }
-
 } // namespace LCompilers
