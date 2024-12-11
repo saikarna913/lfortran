@@ -5,6 +5,7 @@
 #include <libasr/modfile.h>
 #include <libasr/serialization.h>
 #include <libasr/bwriter.h>
+#include <iostream>
 namespace LCompilers {
 const std::string lfortran_modfile_type_string = "LCompilers Modfile";
 inline void save_asr(const ASR::TranslationUnit_t &m, std::string& asr_string) {
