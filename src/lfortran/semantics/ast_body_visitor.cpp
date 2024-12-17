@@ -1239,7 +1239,7 @@ public:
             SetChar variable_dependencies_vec;
             variable_dependencies_vec.reserve(al, 1);
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, tmp_type);
-            ASR::asr_t *v = ASR::make_Variable_t(al, x.base.base.loc, new_scope,
+            ASR::asr_t *v = ASRUtils::make_Variable_t_util(al, x.base.base.loc, new_scope,
                                                  name_c, variable_dependencies_vec.p, variable_dependencies_vec.size(),
                                                  ASR::intentType::Local, nullptr, nullptr, tmp_storage, tmp_type, nullptr,
                                                  ASR::abiType::Source, ASR::accessType::Private, ASR::presenceType::Required,
@@ -1665,7 +1665,7 @@ public:
             ASR::Variable_t* assoc_variable = nullptr;
             ASR::symbol_t* assoc_sym = nullptr;
             if( x.m_assoc_name ) {
-                assoc_sym = ASR::down_cast<ASR::symbol_t>(ASR::make_Variable_t(
+                assoc_sym = ASR::down_cast<ASR::symbol_t>(ASRUtils::make_Variable_t_util(
                     al, x.base.base.loc, current_scope, x.m_assoc_name,
                     nullptr, 0, ASR::intentType::Local, nullptr, nullptr,
                     ASR::storage_typeType::Default, nullptr, nullptr, ASR::abiType::Source,
@@ -2106,7 +2106,7 @@ public:
                         ASR::Var_t* var = ASR::down_cast<ASR::Var_t>(master_function_arg);
                         sym_name = ASRUtils::symbol_name(var->m_v);
                     }
-                    ASR::asr_t* var_asr = ASR::make_Variable_t(al, master_function_arg->base.loc,
+                    ASR::asr_t* var_asr = ASRUtils::make_Variable_t_util(al, master_function_arg->base.loc,
                                             entry_function->m_symtab, s2c(al,sym_name), nullptr, 0, ASR::intentType::Local,
                                             nullptr, nullptr, ASR::storage_typeType::Default, type, nullptr, ASR::abiType::Source,
                                             ASR::accessType::Public, ASR::presenceType::Required, false);
@@ -2490,7 +2490,7 @@ public:
             SetChar variable_dependencies_vec;
             variable_dependencies_vec.reserve(al, 1);
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, int_type);
-            ASR::asr_t* a_variable = ASR::make_Variable_t(al, x.base.base.loc, current_scope, a_var_name_f.c_str(al),
+            ASR::asr_t* a_variable = ASRUtils::make_Variable_t_util(al, x.base.base.loc, current_scope, a_var_name_f.c_str(al),
                                                           variable_dependencies_vec.p, variable_dependencies_vec.size(),
                                                           ASR::intentType::Local, nullptr, nullptr,
                                                           ASR::storage_typeType::Default, int_type, nullptr,
@@ -2560,11 +2560,20 @@ public:
                             return false;
                         } else {
                             bool no_array_sections = true;
+                            bool constant_args = false;
                             for (size_t i = 0; i < func_call_or_array->n_args; i++) {
                                 if (func_call_or_array->m_args[i].m_step != nullptr) {
                                     no_array_sections = false;
                                     break;
                                 }
+                                if ( func_call_or_array->m_args[i].m_end != nullptr &&
+                                     AST::is_a<AST::Num_t>(*func_call_or_array->m_args[i].m_end) ) {
+                                    constant_args = true;
+                                    break;
+                                }
+                            }
+                            if (constant_args) {
+                                return false;
                             }
                             if (no_array_sections) {
                                 return true;
@@ -2617,7 +2626,7 @@ public:
             SetChar variable_dependencies_vec;
             variable_dependencies_vec.reserve(al, 1);
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, ASRUtils::expr_type(end));
-            ASR::asr_t *arg_var = ASR::make_Variable_t(al, x.base.base.loc,
+            ASR::asr_t *arg_var = ASRUtils::make_Variable_t_util(al, x.base.base.loc,
                 current_scope, s2c(al, arg_name),
                 variable_dependencies_vec.p, variable_dependencies_vec.size(),
                 ASRUtils::intent_in, nullptr, nullptr,
@@ -2658,7 +2667,7 @@ public:
         SetChar variable_dependencies_vec;
         variable_dependencies_vec.reserve(al, 1);
         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type);
-        ASR::asr_t *return_var = ASR::make_Variable_t(al, x.base.base.loc,
+        ASR::asr_t *return_var = ASRUtils::make_Variable_t_util(al, x.base.base.loc,
             current_scope, s2c(al, return_var_name),
             variable_dependencies_vec.p, variable_dependencies_vec.size(),
             ASRUtils::intent_return_var, nullptr, nullptr,
@@ -3883,7 +3892,7 @@ public:
         orelse.reserve(al, x.n_orelse);
         transform_stmts(orelse, x.n_orelse, x.m_orelse);
         if (ASRUtils::is_array(ASRUtils::expr_type(test))) {
-            if (ASR::is_a<ASR::Logical_t>(*ASRUtils::type_get_past_array_pointer_allocatable(ASRUtils::expr_type(test)))) {
+            if (ASR::is_a<ASR::Logical_t>(*ASRUtils::extract_type(ASRUtils::expr_type(test)))) {
                 // verify that `test` is *not* the ttype of an expression as we then
                 // are sure that it is a single standalone logical array
                 if  (!ASR::is_a<ASR::IntegerCompare_t>(*test)
@@ -4402,12 +4411,24 @@ public:
     }
 
     void visit_Nullify(const AST::Nullify_t &x) {
-        Vec<ASR::symbol_t*> arg_vec;
+        Vec<ASR::expr_t*> arg_vec;
         arg_vec.reserve(al, x.n_args);
         for( size_t i = 0; i < x.n_args; i++ ) {
             this->visit_expr(*(x.m_args[i]));
             ASR::expr_t* tmp_expr = ASRUtils::EXPR(tmp);
-            if( tmp_expr->type != ASR::exprType::Var ) {
+            if (ASRUtils::is_pointer(ASRUtils::expr_type(tmp_expr))) {
+                if(ASR::is_a<ASR::StructInstanceMember_t>(*tmp_expr) || ASR::is_a<ASR::Var_t>(*tmp_expr)) {
+                    arg_vec.push_back(al, tmp_expr);
+                }
+                else {
+                    diag.add(Diagnostic(
+                    "Pointer must be of Variable type or StructInstanceMember type in order to get nullified.",
+                    Level::Error, Stage::Semantic, {
+                        Label("",{tmp_expr->base.loc})
+                    }));
+                throw SemanticAbort();
+                }
+            } else {
                 diag.add(Diagnostic(
                     "Only a pointer variable symbol "
                     "can be nullified.",
@@ -4415,32 +4436,6 @@ public:
                         Label("",{tmp_expr->base.loc})
                     }));
                 throw SemanticAbort();
-            } else {
-                const ASR::Var_t* tmp_var = ASR::down_cast<ASR::Var_t>(tmp_expr);
-                ASR::symbol_t* tmp_sym = tmp_var->m_v;
-                if( ASRUtils::symbol_get_past_external(tmp_sym)->type
-                    != ASR::symbolType::Variable ) {
-                    diag.add(Diagnostic(
-                        "Only a pointer variable symbol "
-                        "can be nullified.",
-                        Level::Error, Stage::Semantic, {
-                            Label("",{tmp_expr->base.loc})
-                        }));
-                    throw SemanticAbort();
-                } else {
-                    ASR::Variable_t* tmp_v = ASR::down_cast<ASR::Variable_t>(tmp_sym);
-                    if (ASR::is_a<ASR::Pointer_t>(*tmp_v->m_type)) {
-                        arg_vec.push_back(al, tmp_sym);
-                    } else {
-                        diag.add(Diagnostic(
-                            "Only a pointer variable symbol "
-                            "can be nullified.",
-                            Level::Error, Stage::Semantic, {
-                                Label("",{tmp_expr->base.loc})
-                            }));
-                        throw SemanticAbort();
-                    }
-                }
             }
         }
         tmp = ASR::make_Nullify_t(al, x.base.base.loc, arg_vec.p, arg_vec.size());

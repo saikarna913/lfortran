@@ -654,10 +654,10 @@ class EditProcedureCallsVisitor : public ASR::ASRPassBaseWalkVisitor<EditProcedu
                 if(type_dec && v.proc2newproc.find(type_dec) != v.proc2newproc.end() && 
                     ASR::is_a<ASR::Function_t>(*ASRUtils::symbol_get_past_external(type_dec))){
                     ASR::symbol_t* new_sym = v.proc2newproc[type_dec].first;
-                    ASR::Function_t * subrout = ASR::down_cast<ASR::Function_t>(ASRUtils::symbol_get_past_external(type_dec));
+                    ASR::Function_t * subrout = ASR::down_cast<ASR::Function_t>(ASRUtils::symbol_get_past_external(new_sym));
                     std::string new_sym_name = current_scope->get_unique_name(ASRUtils::symbol_name(x.m_v));
                     ASR::symbol_t* new_func_sym_ = ASR::down_cast<ASR::symbol_t>(
-                        ASR::make_Variable_t(v.al, x.m_v->base.loc, current_scope, s2c(v.al, new_sym_name), 
+                        ASRUtils::make_Variable_t_util(v.al, x.m_v->base.loc, current_scope, s2c(v.al, new_sym_name), 
                             variable->m_dependencies, variable->n_dependencies, variable->m_intent, 
                             variable->m_symbolic_value, variable->m_value, variable->m_storage, subrout->m_function_signature, 
                             new_sym, variable->m_abi, variable->m_access, variable->m_presence, variable->m_value_attr));

@@ -1132,12 +1132,20 @@ public:
 
     void visit_Nullify(const ASR::Nullify_t& x) {
         for( size_t i = 0; i < x.n_vars; i++ ) {
-            std::uint32_t h = get_hash((ASR::asr_t*)x.m_vars[i]);
+            ASR::symbol_t* tmp_sym;
+            if (ASR::is_a<ASR::StructInstanceMember_t>(*x.m_vars[i])) {
+                tmp_sym = ASR::down_cast<ASR::StructInstanceMember_t>(x.m_vars[i])->m_m;
+            } else if (ASR::is_a<ASR::Var_t>(*x.m_vars[i])) {
+                tmp_sym = ASR::down_cast<ASR::Var_t>(x.m_vars[i])->m_v;
+            } else {
+                throw CodeGenError("Only StructInstanceMember and Variable are supported Nullify type");
+            }
+            std::uint32_t h = get_hash((ASR::asr_t*)tmp_sym);
             llvm::Value *target = llvm_symtab[h];
             llvm::Type* tp = llvm_utils->get_type_from_ttype_t_util(
                 ASRUtils::type_get_past_pointer(
                 ASRUtils::type_get_past_allocatable(
-                ASRUtils::symbol_type(x.m_vars[i]))), module.get());
+                ASRUtils::symbol_type(tmp_sym))), module.get());
             llvm::Value* np = builder->CreateIntToPtr(
                 llvm::ConstantInt::get(context, llvm::APInt(32, 0)),
                 tp->getPointerTo());
@@ -2687,6 +2695,11 @@ public:
         }
     }
 
+    bool isNullValueArray(const std::vector<llvm::Constant*>& elements) {
+        return std::all_of(elements.begin(), elements.end(),
+            [](llvm::Constant* elem) { return elem->isNullValue(); });
+    }
+
     void visit_Variable(const ASR::Variable_t &x) {
         if (x.m_value && x.m_storage == ASR::storage_typeType::Parameter) {
             this->visit_expr_wrapper(x.m_value, true);
@@ -2791,7 +2804,13 @@ public:
                         }
                     }
                     llvm::ArrayType* arr_type = llvm::ArrayType::get(type, arr_const_size);
-                    module->getNamedGlobal(x.m_name)->setInitializer(llvm::ConstantArray::get(arr_type, arr_elements));
+                    llvm::Constant* initializer = nullptr;
+                    if (isNullValueArray(arr_elements)) {
+                        initializer = llvm::ConstantArray::getNullValue(type);
+                    } else {
+                        initializer = llvm::ConstantArray::get(arr_type, arr_elements);
+                    }
+                    module->getNamedGlobal(x.m_name)->setInitializer(initializer);
                 } else {
                     module->getNamedGlobal(x.m_name)->setInitializer(llvm::ConstantArray::getNullValue(type));
                 }
@@ -3724,6 +3743,16 @@ public:
                 ptr_loads = 2;
                 for( size_t i = 0; i < n_dims; i++ ) {
                     this->visit_expr_wrapper(m_dims[i].m_length, true);
+
+                    // Make dimension length and return size compatible.(TODO : array_size should be of type int64)
+                    if(ASRUtils::extract_kind_from_ttype_t(
+                        ASRUtils::expr_type(m_dims[i].m_length)) > 4){
+                        tmp = builder->CreateTrunc(tmp, llvm::IntegerType::get(context, 32));
+                    } else if (ASRUtils::extract_kind_from_ttype_t(
+                        ASRUtils::expr_type(m_dims[i].m_length)) < 4){
+                        tmp = builder->CreateSExt(tmp, llvm::IntegerType::get(context, 32));
+                    }
+
                     array_size = builder->CreateMul(array_size, tmp);
                 }
                 ptr_loads = ptr_loads_copy;
@@ -3938,7 +3967,7 @@ public:
 
     bool is_function_variable(const ASR::Variable_t &v) {
         if (v.m_type_declaration) {
-            return ASR::is_a<ASR::Function_t>(*v.m_type_declaration);
+            return ASR::is_a<ASR::Function_t>(*ASRUtils::symbol_get_past_external(v.m_type_declaration));
         } else {
             return false;
         }
@@ -3966,7 +3995,7 @@ public:
                 ASR::Variable_t *v = ASR::down_cast<ASR::Variable_t>(s);
                 if (is_function_variable(*v)) {
                     // * Function (callback) Variable (`procedure(fn) :: x`)
-                    s = v->m_type_declaration;
+                    s = ASRUtils::symbol_get_past_external(v->m_type_declaration);
                 } else {
                     // * Variable (`integer :: x`)
                     ASR::Variable_t *arg = EXPR2VAR(x.m_args[i]);
@@ -8320,7 +8349,7 @@ public:
 
         load_non_array_non_character_pointers(v, ASRUtils::expr_type(v), tmp);
         bool is_array = ASRUtils::is_array(t) && add_type_as_int; // add (type_as_int + array_size)
-        t = ASRUtils::type_get_past_array_pointer_allocatable(t);
+        t = ASRUtils::extract_type(t);
         int a_kind = ASRUtils::extract_kind_from_ttype_t(t);
 
         int32_t number_of_type = -1;
@@ -8808,6 +8837,19 @@ public:
                                     tmp = llvm_utils->CreateLoad2(arg->m_type, tmp);
                                 }
                             } else {
+                                if(arg->m_type_declaration && ASR::is_a<ASR::Function_t>(
+                                        *ASRUtils::symbol_get_past_external(arg->m_type_declaration))){
+                                    // (FunctionType)** --> (FunctionType)*
+                                    ASR::Function_t* fn = ASR::down_cast<ASR::Function_t>(
+                                        symbol_get_past_external(arg->m_type_declaration));
+                                    uint32_t h = get_hash((ASR::asr_t*)fn);
+                                    if (ASRUtils::get_FunctionType(fn)->m_deftype == ASR::deftypeType::Implementation) {
+                                        LCOMPILERS_ASSERT(llvm_symtab_fn.find(h) != llvm_symtab_fn.end());
+                                        tmp = llvm_symtab_fn[h];
+                                    } else if(llvm_symtab_fn_arg.find(h) != llvm_symtab_fn_arg.end()) {
+                                        tmp = llvm_symtab_fn_arg[h];
+                                    }
+                                }
                                 if( orig_arg &&
                                     !LLVM::is_llvm_pointer(*orig_arg->m_type) &&
                                     LLVM::is_llvm_pointer(*arg->m_type) &&
@@ -9276,13 +9318,8 @@ public:
             proc_sym = clss_proc->m_proc;
         } else if (ASR::is_a<ASR::Variable_t>(*proc_sym)) {
             ASR::symbol_t *type_decl = ASR::down_cast<ASR::Variable_t>(proc_sym)->m_type_declaration;
-            LCOMPILERS_ASSERT(type_decl);
-            if (ASR::is_a<ASR::Function_t>(*type_decl)) {
-                s = ASR::down_cast<ASR::Function_t>(type_decl);
-            } else {
-                proc_sym = ASRUtils::symbol_get_past_external(type_decl);
-                s = ASR::down_cast<ASR::Function_t>(ASRUtils::symbol_get_past_external(type_decl));
-            }
+            LCOMPILERS_ASSERT(type_decl && ASR::is_a<ASR::Function_t>(*ASRUtils::symbol_get_past_external(type_decl)));
+            s = ASR::down_cast<ASR::Function_t>(ASRUtils::symbol_get_past_external(type_decl));
         } else {
             throw CodeGenError("SubroutineCall: Symbol type not supported");
         }
@@ -10130,6 +10167,16 @@ public:
                         ptr_loads = 2;
                         for( int i = 0; i < n_dims; i++ ) {
                             visit_expr_wrapper(m_dims[i].m_length, true);
+
+                            // Make dimension length and return size compatible.
+                            if(ASRUtils::extract_kind_from_ttype_t(
+                                ASRUtils::expr_type(m_dims[i].m_length)) > kind){
+                                    tmp = builder->CreateTrunc(tmp, llvm::IntegerType::get(context, 8 * kind));
+                            } else if (ASRUtils::extract_kind_from_ttype_t(
+                                ASRUtils::expr_type(m_dims[i].m_length)) < kind){
+                                tmp = builder->CreateSExt(tmp, llvm::IntegerType::get(context, 8 * kind));
+                            }
+
                             llvm_size = builder->CreateMul(tmp, llvm_size);
                         }
                         ptr_loads = ptr_loads_copy;

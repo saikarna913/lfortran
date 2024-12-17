@@ -1603,9 +1603,9 @@ namespace Cshift {
             is_dim_present = true;
         }
 
-        ASR::ttype_t *type_array = expr_type(array);
-        ASR::ttype_t *type_shift = expr_type(shift);
-        ASR::ttype_t *ret_type = expr_type(array);
+        ASR::ttype_t *type_array = ASRUtils::type_get_past_allocatable_pointer(expr_type(array));
+        ASR::ttype_t *type_shift = ASRUtils::type_get_past_allocatable_pointer(expr_type(shift));
+        ASR::ttype_t *ret_type = ASRUtils::type_get_past_allocatable_pointer(expr_type(array));
         if ( !is_array(type_array) ) {
             append_error(diag, "The argument `array` in `cshift` must be of type Array", array->base.loc);
             return nullptr;
@@ -1668,10 +1668,11 @@ namespace Cshift {
             end do
         */
         if( !ASRUtils::is_fixed_size_array(return_type) ) {
+            int64_t n_dims_return_type = ASRUtils::extract_n_dims_from_ttype(return_type);
             bool is_allocatable = ASRUtils::is_allocatable(return_type);
             Vec<ASR::dimension_t> empty_dims;
             empty_dims.reserve(al, 2);
-            for( int idim = 0; idim < 2; idim++ ) {
+            for( int idim = 0; idim < n_dims_return_type; idim++ ) {
                 ASR::dimension_t empty_dim;
                 empty_dim.loc = loc;
                 empty_dim.m_start = nullptr;
@@ -2244,7 +2245,7 @@ namespace Eoshift {
             final_boundary = boundary;
         }
         else{
-            ASR::ttype_t *boundary_type = use_experimental_simplifier ? ASRUtils::type_get_past_array_pointer_allocatable(type_array) : type_array;
+            ASR::ttype_t *boundary_type = use_experimental_simplifier ? ASRUtils::extract_type(type_array) : type_array;
             if(is_integer(*type_array))
                 final_boundary = b.i_t(0, boundary_type);
             else if(is_real(*type_array))
@@ -3531,7 +3532,7 @@ namespace FindLoc {
     } else {
         result = declare("result", return_type, ReturnVar);
     }
-    ASR::ttype_t *type = ASRUtils::type_get_past_array_pointer_allocatable(return_type);
+    ASR::ttype_t *type = ASRUtils::extract_type(return_type);
     ASR::expr_t *i = declare("i", type, Local);
     ASR::expr_t *array = args[0];
     ASR::expr_t *value = args[1];
